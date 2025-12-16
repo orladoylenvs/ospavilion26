@@ -1,0 +1,98 @@
+---
+title: "Evolution of Metadata-driven Analysis Results"
+format: html
+toc: true
+---
+
+#
+#load packages
+```{r}
+library(dplyr)
+library(pharmaverseadam)
+library(cards)
+```
+
+```{r}
+data(adae)
+data(adsl)
+```
+
+
+# 1: metadata and base code
+
+Starting with the most simplistic approach. Here we want to demonstrate how we can use a bespoke metadata structure to drive commonly used R packages like `dplyr`. 
+```{r}
+metadata <- list(
+    result_id = "AE_SUMMARY_SEVERE",              # Unique identifier for the result
+    analysis_purpose = "Safety",                  # Purpose of the analysis
+    analysis_dataset = "ADAE",                    # Source dataset
+    analysis_population = "Safety Population",
+    parameter = "Subjects with Severe Adverse Events", # Parameter being summarised
+    analysis_variable = c("AEBODSYS", "AEDECOD"),     # Variables used in the analysis
+    analysis_value = c("COUNT", "PERCENTAGE"),        # Values displayed
+    treatment_variable = "TRT01A",                # Grouping variable
+    filter_condition = "AESEV == 'SEVERE'",        # Applied filter
+    display_title = "Summary of Severe Adverse Events by Treatment Arm",
+    display_type = "Table",                       # ARS Display attribute
+    notes = "Includes treatment-emergent severe adverse events only"
+)
+```
+
+```{r}
+library(rlang)
+
+# Pull names from metadata so we don't hardcode them below
+trt_var   <- metadata$treatment_variable
+anal_vars <- metadata$analysis_variable
+
+# 1) Filter ADAE per ARS metadata (e.g., severe AEs)
+adae_f <- adae %>%
+    filter(!!parse_expr(metadata$filter_condition))
+
+# 2) Denominators N by treatment arm from ADSL (Safety population)
+denom <- ADSL %>%
+    filter(SAFFL == "Y") %>%                      # adjust if your pop flag differs
+    distinct(USUBJID, .keep_all = TRUE) %>%       # one row per subject
+    count(!!sym(trt_var), name = "N") %>%         # N per treatment arm
+    rename(treatment_group = !!sym(trt_var))
+
+# 3) Subject counts per SOC/PT per treatment (COUNT) and PERCENTAGE = COUNT/N*100
+ars_results <- adae_f %>%
+    # subject-level dedup within grouping (ensures "subjects with ≥1 AE", not event counts)
+    distinct(USUBJID, !!sym(trt_var), across(all_of(anal_vars))) %>%
+    count(!!sym(trt_var), across(all_of(anal_vars)), name = "COUNT") %>%
+    rename(treatment_group = !!sym(trt_var)) %>%
+    left_join(denom, by = "treatment_group") %>%
+    mutate(PERCENTAGE = if_else(N > 0, 100 * COUNT / N, NA_real_)) %>%
+    # 4) Attach a few ARS fields as columns (same values on all rows)
+    mutate(
+        result_id           = metadata$result_id,
+        analysis_purpose    = metadata$analysis_purpose,
+        analysis_dataset    = metadata$analysis_dataset,
+        analysis_population = metadata$analysis_population,
+        parameter           = metadata$parameter,
+        analysis_value      = paste(metadata$analysis_value, collapse = ", "),
+        treatment_variable  = trt_var,
+        filter_condition    = metadata$filter_condition,
+        display_title       = metadata$display_title,
+        display_type        = metadata$display_type
+    ) %>%
+    relocate(
+        result_id, analysis_purpose, analysis_dataset, analysis_population,
+        parameter, treatment_variable, treatment_group,
+        all_of(anal_vars), COUNT, N, PERCENTAGE,
+        analysis_value, filter_condition,
+        display_title, display_type
+    )
+
+```
+
+
+
+# 2: metadata and packaged code
+- simple metadata, maybe add subgroups
+- use a package like cards
+
+# 3: Scaling in your org: standardised metadata and packaged code
+- CDISC ARS concepts
+- demo internal tool?
